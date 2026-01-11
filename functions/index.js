@@ -7,18 +7,18 @@ const url = require('url');
 
 const app = express();
 
-// This line allows ANY URL to access this proxy
+// This allows ANY frontend domain to access this proxy
 app.use(cors({ origin: true }));
 
 app.all('*', (req, res) => {
-    // It looks for a ?url=... parameter
+    // Look for the URL in the query string (e.g., /proxy?url=...)
     let targetUrl = req.query.url;
 
     if (!targetUrl) {
-        return res.status(400).send('Please provide a URL. Example: ?url=https://google.com');
+        return res.status(400).send('Error: No URL provided. Usage: /proxy?url=https://example.com');
     }
 
-    // Add https if missing
+    // Auto-fix missing protocol
     if (!targetUrl.startsWith('http')) {
         targetUrl = 'https://' + targetUrl;
     }
@@ -34,10 +34,16 @@ app.all('*', (req, res) => {
         headers: { ...req.headers }
     };
 
-    // Remove host header to avoid security blocks on the target site
+    // Remove headers that would cause the target site to block the request
     delete options.headers['host'];
+    delete options.headers['origin'];
+    delete options.headers['referer'];
+    
+    // Add a common User-Agent so the request looks like a real browser
+    options.headers['user-agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
     const proxyReq = protocol.request(options, (proxyRes) => {
+        // Forward the status code and headers from the target site back to the frontend
         res.writeHead(proxyRes.statusCode, proxyRes.headers);
         proxyRes.pipe(res);
     });
@@ -46,8 +52,14 @@ app.all('*', (req, res) => {
         res.status(500).send('Proxy Error: ' + e.message);
     });
 
+    // Pipe the user's request data (like POST body) to the target
     req.pipe(proxyReq);
 });
 
-// This exports the function as "proxy"
-exports.proxy = onRequest({ region: "us-central1", cors: true }, app);
+// "cors: true" here tells Firebase's infrastructure to allow all origins
+exports.proxy = onRequest({ 
+    region: "us-central1", 
+    cors: true,
+    maxInstances: 10,
+    invoker: 'public' // Ensures the URL is accessible to everyone
+}, app);
